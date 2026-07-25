@@ -1,0 +1,75 @@
+name: Daily NewJeans Countdown
+
+on:
+  schedule:
+    # 15:00 UTC = 00:00 KST (the next day). KST is UTC+9 year-round (no DST).
+    - cron: '0 15 * * *'
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab too
+
+permissions:
+  contents: read
+
+jobs:
+  post-countdown:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Compute days remaining
+        id: days
+        run: |
+          DAYS=$(python3 -c "import datetime; print((datetime.date(2029,8,1)-datetime.date.today()).days)")
+          echo "Days remaining: $DAYS"
+          echo "days=$DAYS" >> "$GITHUB_OUTPUT"
+
+      - name: Stop automation if the countdown already finished
+        if: fromJson(steps.days.outputs.days) < 0
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          echo "Countdown already finished — disabling this workflow so it stops running."
+          gh workflow disable "daily-countdown.yml" --repo "$GITHUB_REPOSITORY"
+
+      - name: Set up Python
+        if: fromJson(steps.days.outputs.days) >= 0
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ffmpeg
+        if: fromJson(steps.days.outputs.days) >= 0
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        if: fromJson(steps.days.outputs.days) >= 0
+        run: pip install moviepy pillow requests
+
+      - name: Generate today's video
+        if: fromJson(steps.days.outputs.days) >= 0
+        run: |
+          python3 countdown.py \
+            --background background.mp4 \
+            --output today.mp4 \
+            --font Inter-SemiBold.ttf \
+            --emoji-image hearts_emoji.png
+
+      - name: Post to TikTok
+        if: fromJson(steps.days.outputs.days) >= 0
+        env:
+          TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          TIKTOK_REFRESH_TOKEN: ${{ secrets.TIKTOK_REFRESH_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          VIDEO_PATH: today.mp4
+          VIDEO_TITLE: "There are ${{ steps.days.outputs.days }} days until NewJeans is free"
+        run: python3 post_to_tiktok.py
+
+      - name: Stop automation after the final countdown post
+        if: fromJson(steps.days.outputs.days) == 0
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          echo "That was the last day of the countdown — disabling this workflow."
+          gh workflow disable "daily-countdown.yml" --repo "$GITHUB_REPOSITORY"
